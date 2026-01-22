@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { createSpeechRecognition } from '$lib/speechRecognition';
 
 	let isListening = $state(false);
@@ -11,9 +11,15 @@
 	let error = $state('');
 	let isSupported = $state(true);
 	let lastContext = $state('');
+	let micLevel = $state(0);
+	let micStatus = $state('');
 
 	let speechRecognition: ReturnType<typeof createSpeechRecognition> | null = null;
 	let generateTimeout: ReturnType<typeof setTimeout> | null = null;
+	let audioContext: AudioContext | null = null;
+	let analyser: AnalyserNode | null = null;
+	let microphone: MediaStreamAudioSourceNode | null = null;
+	let animationId: number | null = null;
 
 	onMount(() => {
 		speechRecognition = createSpeechRecognition(
@@ -33,6 +39,50 @@
 		);
 		isSupported = speechRecognition.isSupported;
 	});
+
+	onDestroy(() => {
+		stopMicMonitor();
+	});
+
+	async function startMicMonitor() {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			audioContext = new AudioContext();
+			analyser = audioContext.createAnalyser();
+			microphone = audioContext.createMediaStreamSource(stream);
+			microphone.connect(analyser);
+			analyser.fftSize = 256;
+
+			const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+			function updateLevel() {
+				if (!analyser) return;
+				analyser.getByteFrequencyData(dataArray);
+				const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+				micLevel = Math.min(100, average * 1.5);
+				animationId = requestAnimationFrame(updateLevel);
+			}
+			updateLevel();
+			micStatus = 'マイク接続中';
+			console.log('[MicMonitor] マイクモニター開始');
+		} catch (e) {
+			console.error('[MicMonitor] マイク取得失敗:', e);
+			micStatus = 'マイク取得失敗';
+		}
+	}
+
+	function stopMicMonitor() {
+		if (animationId) {
+			cancelAnimationFrame(animationId);
+			animationId = null;
+		}
+		if (audioContext) {
+			audioContext.close();
+			audioContext = null;
+		}
+		micLevel = 0;
+		micStatus = '';
+	}
 
 	function scheduleSlideGeneration(transcript: string) {
 		if (generateTimeout) {
@@ -80,14 +130,16 @@
 		}
 	}
 
-	function toggleListening() {
+	async function toggleListening() {
 		if (!speechRecognition) return;
 
 		if (isListening) {
 			speechRecognition.stop();
+			stopMicMonitor();
 			isListening = false;
 		} else {
 			error = '';
+			await startMicMonitor();
 			speechRecognition.start();
 			isListening = true;
 		}
@@ -153,6 +205,16 @@
 				{/if}
 			</button>
 		</div>
+
+		{#if isListening}
+			<div class="mic-monitor">
+				<div class="mic-status">{micStatus}</div>
+				<div class="mic-level-container">
+					<div class="mic-level-bar" style="width: {micLevel}%"></div>
+				</div>
+				<div class="mic-level-text">音量: {Math.round(micLevel)}%</div>
+			</div>
+		{/if}
 
 		{#if error}
 			<div class="error">{error}</div>
@@ -378,5 +440,39 @@
 		border-radius: 8px;
 		color: #fcd34d;
 		text-align: center;
+	}
+
+	.mic-monitor {
+		margin-top: 20px;
+		padding: 16px;
+		background: rgba(255, 255, 255, 0.05);
+		border-radius: 12px;
+		text-align: center;
+	}
+
+	.mic-status {
+		font-size: 0.9rem;
+		color: #888;
+		margin-bottom: 8px;
+	}
+
+	.mic-level-container {
+		width: 100%;
+		height: 8px;
+		background: rgba(255, 255, 255, 0.1);
+		border-radius: 4px;
+		overflow: hidden;
+	}
+
+	.mic-level-bar {
+		height: 100%;
+		background: linear-gradient(90deg, #22c55e 0%, #eab308 50%, #ef4444 100%);
+		transition: width 0.05s ease-out;
+	}
+
+	.mic-level-text {
+		font-size: 0.85rem;
+		color: #666;
+		margin-top: 8px;
 	}
 </style>
