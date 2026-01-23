@@ -54,12 +54,13 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ shouldGenerate: false, title: content.title });
 		}
 
-		// DALL-E 2で画像を生成（高速化）
+		// DALL-E 3で画像を生成
 		const imageResponse = await openai.images.generate({
-			model: 'dall-e-2',
+			model: 'dall-e-3',
 			prompt: `Professional presentation slide illustration: ${content.imagePrompt}. Clean, minimal, modern business style. No text. White background.`,
 			n: 1,
-			size: '1024x1024'
+			size: '1792x1024',
+			quality: 'standard'
 		});
 
 		const imageUrl = imageResponse.data[0].url;
