@@ -19,9 +19,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ error: 'トランスクリプトが必要です' }, { status: 400 });
 		}
 
-		// GPT-4でスライドの内容を決定
+		// GPT-4o-miniでスライドの内容を決定（高速化）
 		const contentResponse = await openai.chat.completions.create({
-			model: 'gpt-4o',
+			model: 'gpt-4o-mini',
 			messages: [
 				{
 					role: 'system',
@@ -54,13 +54,12 @@ export const POST: RequestHandler = async ({ request }) => {
 			return json({ shouldGenerate: false, title: content.title });
 		}
 
-		// DALL-Eで画像を生成
+		// DALL-E 2で画像を生成（高速化）
 		const imageResponse = await openai.images.generate({
-			model: 'dall-e-3',
+			model: 'dall-e-2',
 			prompt: `Professional presentation slide illustration: ${content.imagePrompt}. Clean, minimal, modern business style. No text. White background.`,
 			n: 1,
-			size: '1792x1024',
-			quality: 'standard'
+			size: '1024x1024'
 		});
 
 		const imageUrl = imageResponse.data[0].url;

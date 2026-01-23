@@ -2,6 +2,11 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { createSpeechRecognition } from '$lib/speechRecognition';
 
+	interface MicDevice {
+		deviceId: string;
+		label: string;
+	}
+
 	let isListening = $state(false);
 	let currentTranscript = $state('');
 	let finalTranscript = $state('');
@@ -13,6 +18,11 @@
 	let lastContext = $state('');
 	let micLevel = $state(0);
 	let micStatus = $state('');
+	let availableMics = $state<MicDevice[]>([]);
+	let selectedMicId = $state<string>('');
+	let currentStream: MediaStream | null = null;
+	let recognitionStatus = $state('待機中');
+	let speechDetected = $state(false);
 
 	let speechRecognition: ReturnType<typeof createSpeechRecognition> | null = null;
 	let generateTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -21,12 +31,15 @@
 	let microphone: MediaStreamAudioSourceNode | null = null;
 	let animationId: number | null = null;
 
-	onMount(() => {
+	onMount(async () => {
 		speechRecognition = createSpeechRecognition(
 			(transcript, isFinal) => {
+				speechDetected = true;
+				recognitionStatus = '音声認識中';
 				if (isFinal) {
 					finalTranscript = transcript;
 					currentTranscript = '';
+					recognitionStatus = '認識完了 - スライド生成待機';
 					scheduleSlideGeneration(transcript);
 				} else {
 					currentTranscript = transcript;
@@ -34,19 +47,72 @@
 			},
 			(errorMsg) => {
 				error = errorMsg;
+				recognitionStatus = 'エラー';
 			},
-			'ja-JP'
+			'ja-JP',
+			// 状態変更コールバック
+			(status: string) => {
+				recognitionStatus = status;
+				if (status === '音声検出中') {
+					speechDetected = true;
+				}
+			}
 		);
 		isSupported = speechRecognition.isSupported;
+
+		// マイク一覧を取得
+		await loadMicList();
 	});
 
 	onDestroy(() => {
 		stopMicMonitor();
 	});
 
+	async function loadMicList() {
+		try {
+			// 一度マイクにアクセスして権限を取得（ラベルを取得するため必要）
+			const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			tempStream.getTracks().forEach((track) => track.stop());
+
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			const mics = devices
+				.filter((d) => d.kind === 'audioinput')
+				.map((d) => ({
+					deviceId: d.deviceId,
+					label: d.label || `マイク ${d.deviceId.slice(0, 8)}`
+				}));
+
+			availableMics = mics;
+			console.log('[Mic] 利用可能なマイク:', mics);
+
+			if (mics.length > 0 && !selectedMicId) {
+				selectedMicId = mics[0].deviceId;
+			}
+		} catch (e) {
+			console.error('[Mic] マイク一覧取得失敗:', e);
+		}
+	}
+
 	async function startMicMonitor() {
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			// 既存のストリームを停止
+			if (currentStream) {
+				currentStream.getTracks().forEach((track) => track.stop());
+			}
+
+			const constraints: MediaStreamConstraints = {
+				audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
+			};
+
+			console.log('[MicMonitor] マイク取得中...', constraints);
+			const stream = await navigator.mediaDevices.getUserMedia(constraints);
+			currentStream = stream;
+
+			// 使用中のマイク名を取得
+			const audioTrack = stream.getAudioTracks()[0];
+			const usedMicLabel = audioTrack?.label || '不明なマイク';
+			console.log('[MicMonitor] 使用中のマイク:', usedMicLabel);
+
 			audioContext = new AudioContext();
 			analyser = audioContext.createAnalyser();
 			microphone = audioContext.createMediaStreamSource(stream);
@@ -63,11 +129,12 @@
 				animationId = requestAnimationFrame(updateLevel);
 			}
 			updateLevel();
-			micStatus = 'マイク接続中';
+			micStatus = `使用中: ${usedMicLabel}`;
 			console.log('[MicMonitor] マイクモニター開始');
 		} catch (e) {
 			console.error('[MicMonitor] マイク取得失敗:', e);
 			micStatus = 'マイク取得失敗';
+			error = `マイクの取得に失敗しました: ${e instanceof Error ? e.message : '不明なエラー'}`;
 		}
 	}
 
@@ -75,6 +142,10 @@
 		if (animationId) {
 			cancelAnimationFrame(animationId);
 			animationId = null;
+		}
+		if (currentStream) {
+			currentStream.getTracks().forEach((track) => track.stop());
+			currentStream = null;
 		}
 		if (audioContext) {
 			audioContext.close();
@@ -137,8 +208,12 @@
 			speechRecognition.stop();
 			stopMicMonitor();
 			isListening = false;
+			recognitionStatus = '停止';
+			speechDetected = false;
 		} else {
 			error = '';
+			speechDetected = false;
+			recognitionStatus = '開始中...';
 			await startMicMonitor();
 			speechRecognition.start();
 			isListening = true;
@@ -189,6 +264,17 @@
 			</div>
 		</div>
 
+		{#if availableMics.length > 0 && !isListening}
+			<div class="mic-selector">
+				<label for="mic-select">マイク選択:</label>
+				<select id="mic-select" bind:value={selectedMicId}>
+					{#each availableMics as mic}
+						<option value={mic.deviceId}>{mic.label}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
+
 		<div class="controls">
 			<button
 				class="mic-button"
@@ -213,6 +299,9 @@
 					<div class="mic-level-bar" style="width: {micLevel}%"></div>
 				</div>
 				<div class="mic-level-text">音量: {Math.round(micLevel)}%</div>
+				<div class="recognition-status" class:active={speechDetected}>
+					認識状態: {recognitionStatus}
+				</div>
 			</div>
 		{/if}
 
@@ -474,5 +563,53 @@
 		font-size: 0.85rem;
 		color: #666;
 		margin-top: 8px;
+	}
+
+	.mic-selector {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		margin-top: 20px;
+	}
+
+	.mic-selector label {
+		color: #888;
+		font-size: 0.9rem;
+	}
+
+	.mic-selector select {
+		padding: 8px 12px;
+		border-radius: 8px;
+		border: 1px solid rgba(255, 255, 255, 0.2);
+		background: rgba(255, 255, 255, 0.1);
+		color: #fff;
+		font-size: 0.9rem;
+		min-width: 200px;
+		cursor: pointer;
+	}
+
+	.mic-selector select:focus {
+		outline: none;
+		border-color: #667eea;
+	}
+
+	.mic-selector select option {
+		background: #1a1a2e;
+		color: #fff;
+	}
+
+	.recognition-status {
+		margin-top: 12px;
+		padding: 8px 16px;
+		background: rgba(255, 255, 255, 0.05);
+		border-radius: 8px;
+		font-size: 0.9rem;
+		color: #888;
+	}
+
+	.recognition-status.active {
+		background: rgba(34, 197, 94, 0.2);
+		color: #4ade80;
 	}
 </style>

@@ -49,11 +49,13 @@ declare global {
 }
 
 export type SpeechCallback = (transcript: string, isFinal: boolean) => void;
+export type StatusCallback = (status: string) => void;
 
 export function createSpeechRecognition(
 	onResult: SpeechCallback,
 	onError?: (error: string) => void,
-	lang: string = 'ja-JP'
+	lang: string = 'ja-JP',
+	onStatusChange?: StatusCallback
 ): {
 	start: () => void;
 	stop: () => void;
@@ -83,22 +85,27 @@ export function createSpeechRecognition(
 
 	recognition.onstart = () => {
 		console.log('[SpeechRecognition] 開始しました - マイクがアクティブです');
+		onStatusChange?.('開始 - マイク待機中');
 	};
 
 	recognition.onaudiostart = () => {
 		console.log('[SpeechRecognition] 音声入力開始 - マイクから音声を受信中');
+		onStatusChange?.('音声入力中');
 	};
 
 	recognition.onsoundstart = () => {
 		console.log('[SpeechRecognition] 音検出開始');
+		onStatusChange?.('音検出中');
 	};
 
 	recognition.onspeechstart = () => {
 		console.log('[SpeechRecognition] 音声検出開始 - 話し声を検出しました');
+		onStatusChange?.('音声検出中');
 	};
 
 	recognition.onspeechend = () => {
 		console.log('[SpeechRecognition] 音声検出終了');
+		onStatusChange?.('音声検出終了');
 	};
 
 	recognition.onsoundend = () => {
@@ -107,6 +114,7 @@ export function createSpeechRecognition(
 
 	recognition.onaudioend = () => {
 		console.log('[SpeechRecognition] 音声入力終了');
+		onStatusChange?.('音声入力終了');
 	};
 
 	recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -114,6 +122,7 @@ export function createSpeechRecognition(
 		const transcript = result[0].transcript;
 		const isFinal = result.isFinal;
 		console.log('[SpeechRecognition] 結果:', { transcript, isFinal, confidence: result[0].confidence });
+		onStatusChange?.(isFinal ? '認識完了' : '認識中...');
 		onResult(transcript, isFinal);
 	};
 
@@ -126,12 +135,14 @@ export function createSpeechRecognition(
 		// 無視してよいエラー（音声が検出されなかった、または中断された）
 		if (errorCode === 'no-speech' || errorCode === 'aborted') {
 			console.log('[SpeechRecognition] 無視するエラー:', errorCode);
+			onStatusChange?.('音声なし - 再試行中');
 			return;
 		}
 
 		// ネットワークエラーは再試行で回復することが多い
 		if (errorCode === 'network') {
 			console.warn('[SpeechRecognition] ネットワークエラー、再接続中...');
+			onStatusChange?.('ネットワークエラー - 再接続中');
 			return;
 		}
 
@@ -142,6 +153,7 @@ export function createSpeechRecognition(
 			'service-not-allowed': '音声認識サービスが利用できません。'
 		};
 
+		onStatusChange?.('エラー');
 		onError?.(errorMessages[errorCode || ''] || `音声認識エラー: ${errorCode || '不明なエラー'}`);
 	};
 
@@ -150,6 +162,7 @@ export function createSpeechRecognition(
 		if (isRunning) {
 			// 自動で再開
 			console.log('[SpeechRecognition] 自動再開中...');
+			onStatusChange?.('再接続中...');
 			setTimeout(() => {
 				try {
 					recognition.start();
@@ -164,16 +177,19 @@ export function createSpeechRecognition(
 		start: () => {
 			console.log('[SpeechRecognition] start() 呼び出し');
 			isRunning = true;
+			onStatusChange?.('開始中...');
 			try {
 				recognition.start();
 				console.log('[SpeechRecognition] recognition.start() 成功');
 			} catch (e) {
 				console.error('[SpeechRecognition] recognition.start() 失敗:', e);
+				onStatusChange?.('開始失敗');
 			}
 		},
 		stop: () => {
 			console.log('[SpeechRecognition] stop() 呼び出し');
 			isRunning = false;
+			onStatusChange?.('停止');
 			recognition.stop();
 		},
 		isSupported: true
